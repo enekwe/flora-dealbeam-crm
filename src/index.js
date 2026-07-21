@@ -123,6 +123,7 @@ app.use('/api/v1/integrations/hubspot', require('./routes/v1/integrations/hubspo
 // Intake Forms (Epic 2.5 — DealBeam Intake Forms)
 app.use('/api/v1/forms', require('./routes/v1/forms'));
 app.use('/api/v1/public/forms', require('./routes/v1/public-forms'));
+app.use(require('./routes/hosted-form'));
 
 // 404 handler — must be registered after all routes
 app.use((req, res) => {
