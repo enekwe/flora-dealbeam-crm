@@ -52,6 +52,10 @@ const getPort = () => {
 };
 const PORT = getPort();
 
+// Railway terminates TLS at its proxy — trust the first hop so req.protocol
+// is https and req.ip is the real client (rate limiting keys off it).
+app.set('trust proxy', 1);
+
 // Configure CORS properly
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())

@@ -8,11 +8,13 @@
 
 const crypto = require('crypto');
 const express = require('express');
+const QRCode = require('qrcode');
 const router = express.Router();
 
 const Form = require('../../models/forms/Form');
 const FormSubmission = require('../../models/forms/FormSubmission');
 const { validateAnswers, processSubmission } = require('../../services/forms/formSubmissionService');
+const { notifyNewSubmission } = require('../../services/forms/submissionNotifier');
 const { publicFormRateLimiter, checkHoneypot } = require('../../middleware/publicFormProtection');
 const { singleFileUpload, handleUploadError } = require('../../middleware/fileUpload');
 const s3FileService = require('../../services/storage/s3FileService');
@@ -55,6 +57,25 @@ router.get('/:slug', async (req, res, next) => {
     await form.save();
 
     res.json({ form: toPublicForm(form) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:slug/qr.svg', async (req, res, next) => {
+  try {
+    const form = await loadPublishedForm(req, res);
+    if (!form) return;
+
+    // The QR encodes the hosted form URL — override the derived origin with
+    // PUBLIC_FORMS_BASE_URL when the hosted page lives behind a custom domain.
+    const base = process.env.PUBLIC_FORMS_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const hostedUrl = `${base.replace(/\/$/, '')}/forms/${encodeURIComponent(form.publishSettings.slug)}`;
+
+    const svg = await QRCode.toString(hostedUrl, { type: 'svg', margin: 1, width: 512 });
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(svg);
   } catch (error) {
     next(error);
   }
@@ -160,9 +181,10 @@ router.post('/:slug/submit', checkHoneypot, async (req, res, next) => {
     await submission.save();
 
     try {
-      await processSubmission(form, submission);
+      const { contact } = await processSubmission(form, submission);
       form.analytics.completions += 1;
       await form.save();
+      notifyNewSubmission({ form, submission, contact }); // fire-and-forget
     } catch (processingError) {
       submission.status = 'failed';
       submission.processingError = processingError.message;
