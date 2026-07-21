@@ -38,7 +38,19 @@ const logger = winston.createLogger({
 
 // Create Express app
 const app = express();
-const PORT = process.env.PORT || 3001;
+
+// PORT: single source of truth. Railway injects PORT at runtime — require it
+// in production (fail-fast) and only fall back to 3001 in development.
+const getPort = () => {
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.PORT) {
+      throw new Error('PORT environment variable required in production');
+    }
+    return parseInt(process.env.PORT, 10);
+  }
+  return parseInt(process.env.PORT || '3001', 10);
+};
+const PORT = getPort();
 
 // Configure CORS properly
 const corsOrigins = process.env.CORS_ORIGIN
@@ -105,37 +117,29 @@ app.get('/api/v1/companies', (req, res) => {
   });
 });
 
-// HubSpot integration
-app.post('/api/v1/integrations/hubspot/connect', (req, res) => {
-  const authUrl = `https://app.hubspot.com/oauth/authorize?client_id=${process.env.HUBSPOT_CLIENT_ID}&redirect_uri=${process.env.HUBSPOT_REDIRECT_URI}&scope=crm.objects.contacts.read%20crm.objects.companies.read`;
-  res.json({
-    status: 'success',
-    authUrl
-  });
+// HubSpot integration (OAuth connect/callback/disconnect/status/test)
+app.use('/api/v1/integrations/hubspot', require('./routes/v1/integrations/hubspot'));
+
+// Intake Forms (Epic 2.5 — DealBeam Intake Forms)
+app.use('/api/v1/forms', require('./routes/v1/forms'));
+app.use('/api/v1/public/forms', require('./routes/v1/public-forms'));
+
+// 404 handler — must be registered after all routes
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
 
-app.post('/api/v1/integrations/hubspot/sync', async (req, res) => {
-  try {
-    logger.info('HubSpot sync requested');
-    res.json({
-      status: 'success',
-      message: 'HubSpot sync initiated',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    logger.error('HubSpot sync error:', error);
-    res.status(500).json({ error: 'Sync failed' });
-  }
+// Centralized error handler — must be registered after all routes and the 404 handler
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+  logger.error('Unhandled error:', err);
+  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
 // Database connection
 const connectDatabase = async () => {
   if (process.env.MONGODB_URI) {
     try {
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true
-      });
+      await mongoose.connect(process.env.MONGODB_URI);
       logger.info('MongoDB connected successfully');
     } catch (error) {
       logger.warn('MongoDB connection failed:', error.message);
