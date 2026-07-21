@@ -34,12 +34,20 @@ function isEmpty(value) {
     (Array.isArray(value) && value.length === 0);
 }
 
-function validateAnswers(form, answers = {}) {
+function validateAnswers(form, answers = {}, files = []) {
   const errors = [];
+  const uploadedFieldIds = new Set(files.map((f) => f.fieldId));
 
   for (const field of form.fields) {
     if (field.type === 'section_header') continue;
     if (!isFieldVisible(field, answers)) continue;
+
+    if (field.type === 'file_upload') {
+      if (field.required && !uploadedFieldIds.has(field.id)) {
+        errors.push({ fieldId: field.id, message: `${field.label} is required` });
+      }
+      continue;
+    }
 
     const value = answers[field.id];
 

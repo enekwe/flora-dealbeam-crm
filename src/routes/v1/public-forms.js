@@ -1,10 +1,9 @@
 /**
  * Intake Forms — Public API
  * Unauthenticated endpoints for hosted/embedded forms (Epic 2.5,
- * MP-2.5-S9/S10). File uploads are accepted as pre-uploaded {url, filename,
- * size, mimeType} references — this service has no storage backend wired
- * up yet, so the embed client is expected to upload directly to storage
- * (e.g. a signed S3 URL from another Flora service) and pass the result here.
+ * MP-2.5-S9/S10). File-upload fields go through POST /:slug/upload first,
+ * which stores the file in S3 and returns a {fieldId, key, filename, size,
+ * mimeType} reference for the client to include in its /:slug/submit call.
  */
 
 const crypto = require('crypto');
@@ -15,6 +14,8 @@ const Form = require('../../models/forms/Form');
 const FormSubmission = require('../../models/forms/FormSubmission');
 const { validateAnswers, processSubmission } = require('../../services/forms/formSubmissionService');
 const { publicFormRateLimiter, checkHoneypot } = require('../../middleware/publicFormProtection');
+const { singleFileUpload, handleUploadError } = require('../../middleware/fileUpload');
+const s3FileService = require('../../services/storage/s3FileService');
 
 router.use(publicFormRateLimiter);
 
@@ -73,6 +74,43 @@ router.post('/:slug/start', async (req, res, next) => {
   }
 });
 
+router.post('/:slug/upload', singleFileUpload, handleUploadError, async (req, res, next) => {
+  try {
+    const form = await loadPublishedForm(req, res);
+    if (!form) return;
+
+    const { fieldId } = req.body;
+    const field = form.fields.find((f) => f.id === fieldId && f.type === 'file_upload');
+
+    if (!field) {
+      return res.status(400).json({ error: 'Unknown or non-file field: ' + fieldId });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file provided' });
+    }
+
+    const { valid, error } = s3FileService.validateFile(
+      req.file.buffer,
+      req.file.mimetype,
+      field.validation || {}
+    );
+    if (!valid) {
+      return res.status(400).json({ error });
+    }
+
+    const uploaded = await s3FileService.uploadBuffer({
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      originalFilename: req.file.originalname,
+      keyPrefix: `form-submissions/${form.organizationId}/${form._id}`
+    });
+
+    res.status(201).json({ fieldId, ...uploaded });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/:slug/submit', checkHoneypot, async (req, res, next) => {
   try {
     const form = await loadPublishedForm(req, res);
@@ -92,15 +130,25 @@ router.post('/:slug/submit', checkHoneypot, async (req, res, next) => {
 
     const { answers = {}, files = [] } = req.body;
 
-    const { valid, errors } = validateAnswers(form, answers);
+    const { valid, errors } = validateAnswers(form, answers, files);
     if (!valid) {
       return res.status(400).json({ error: 'Validation failed', errors });
+    }
+
+    // Surface the uploaded filename under the field's answer too, so CSV
+    // export and CRM custom-field mapping show something readable without
+    // needing to resolve the S3 key.
+    const answersWithFileNames = { ...answers };
+    for (const file of files) {
+      if (!(file.fieldId in answersWithFileNames)) {
+        answersWithFileNames[file.fieldId] = file.filename;
+      }
     }
 
     const submission = new FormSubmission({
       formId: form._id,
       organizationId: form.organizationId,
-      answers,
+      answers: answersWithFileNames,
       files,
       source: {
         ipHash: hashIp(req.ip),

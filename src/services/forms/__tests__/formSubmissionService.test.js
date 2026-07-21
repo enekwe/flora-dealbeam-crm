@@ -77,6 +77,35 @@ describe('validateAnswers', () => {
   });
 });
 
+describe('validateAnswers — file_upload fields', () => {
+  function buildFormWithFileField(required) {
+    return buildForm({
+      fields: [
+        { id: 'pitch_deck', label: 'Pitch deck', type: 'file_upload', required }
+      ]
+    });
+  }
+
+  it('requires an uploaded file when the field is required', () => {
+    const form = buildFormWithFileField(true);
+    const { valid, errors } = validateAnswers(form, {}, []);
+    expect(valid).toBe(false);
+    expect(errors[0].fieldId).toBe('pitch_deck');
+  });
+
+  it('passes once a matching file reference is present', () => {
+    const form = buildFormWithFileField(true);
+    const { valid } = validateAnswers(form, {}, [{ fieldId: 'pitch_deck', filename: 'deck.pdf' }]);
+    expect(valid).toBe(true);
+  });
+
+  it('does not require a file when the field is optional', () => {
+    const form = buildFormWithFileField(false);
+    const { valid } = validateAnswers(form, {}, []);
+    expect(valid).toBe(true);
+  });
+});
+
 describe('isFieldVisible', () => {
   it('evaluates equals/not_equals/contains operators', () => {
     const equalsField = { conditional: { fieldId: 'x', operator: 'equals', value: 'a' } };

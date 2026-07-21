@@ -8,7 +8,9 @@ const mongoose = require('mongoose');
 const fileRefSchema = new mongoose.Schema({
   fieldId: { type: String, required: true },
   filename: String,
-  url: String,
+  // S3 object key — objects are private; generate a presigned URL on demand
+  // via s3FileService.getSignedDownloadUrl() rather than storing a public one.
+  key: String,
   size: Number,
   mimeType: String
 }, { _id: false });

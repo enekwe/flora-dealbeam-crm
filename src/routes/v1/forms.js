@@ -10,6 +10,7 @@ const router = express.Router();
 const Form = require('../../models/forms/Form');
 const FormSubmission = require('../../models/forms/FormSubmission');
 const { requireAuth, requireRole } = require('../../middleware/auth');
+const s3FileService = require('../../services/storage/s3FileService');
 
 router.use(requireAuth, requireRole('gp', 'admin'));
 
@@ -170,6 +171,28 @@ router.get('/:id/submissions', async (req, res, next) => {
     ]);
 
     res.json({ submissions, total, page: pageNum, limit: limitNum });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/submissions/:submissionId/files/:fieldId', async (req, res, next) => {
+  try {
+    const form = await loadOwnedForm(req, res);
+    if (!form) return;
+
+    const submission = await FormSubmission.findOne({ _id: req.params.submissionId, formId: form._id });
+    if (!submission) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const fileRef = submission.files.find((f) => f.fieldId === req.params.fieldId);
+    if (!fileRef) {
+      return res.status(404).json({ error: 'No file uploaded for this field' });
+    }
+
+    const url = await s3FileService.getSignedDownloadUrl(fileRef.key);
+    res.json({ url, filename: fileRef.filename, expiresIn: s3FileService.presignedUrlExpirySeconds });
   } catch (error) {
     next(error);
   }
