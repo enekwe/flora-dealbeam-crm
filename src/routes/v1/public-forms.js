@@ -149,7 +149,24 @@ router.post('/:slug/submit', checkHoneypot, async (req, res, next) => {
       return res.status(201).json(successResponse);
     }
 
-    const { answers = {}, files = [] } = req.body;
+    const { answers = {}, files: rawFiles = [] } = req.body;
+
+    // `files` is client-supplied on an unauthenticated endpoint — nothing
+    // stops a caller from skipping POST /upload and fabricating a {key: ...}
+    // pointing at an S3 object it doesn't own. Only accept refs whose key
+    // falls under this form's own upload prefix (see POST /:slug/upload)
+    // and whose fieldId names an actual file_upload field, so a crafted
+    // submission can't later hand a GP admin a presigned URL to someone
+    // else's object via GET /:id/submissions/:submissionId/files/:fieldId.
+    const expectedKeyPrefix = `form-submissions/${form.organizationId}/${form._id}/`;
+    const fileUploadFieldIds = new Set(
+      form.fields.filter((f) => f.type === 'file_upload').map((f) => f.id)
+    );
+    const files = (Array.isArray(rawFiles) ? rawFiles : []).filter((file) =>
+      file && typeof file.key === 'string' &&
+      file.key.startsWith(expectedKeyPrefix) &&
+      fileUploadFieldIds.has(file.fieldId)
+    );
 
     const { valid, errors } = validateAnswers(form, answers, files);
     if (!valid) {

@@ -208,8 +208,14 @@ router.get('/:id/submissions/export', async (req, res, next) => {
     const fieldIds = form.fields.filter((f) => f.type !== 'section_header').map((f) => f.id);
     const header = ['submittedAt', 'status', 'contactId', 'dealId', ...fieldIds];
 
+    // Submission answers come from an unauthenticated public form — a cell
+    // starting with =, +, -, or @ is interpreted as a formula by Excel/
+    // Sheets when this CSV is opened, so neutralize it before quoting.
     const escapeCsv = (value) => {
-      const str = value === undefined || value === null ? '' : String(value);
+      let str = value === undefined || value === null ? '' : String(value);
+      if (/^[=+\-@]/.test(str)) {
+        str = `'${str}`;
+      }
       return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
     };
 
