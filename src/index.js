@@ -75,11 +75,20 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  // mongoose.connection.readyState: 0=disconnected, 1=connected,
+  // 2=connecting, 3=disconnecting. Surfacing this here means a broken DB
+  // connection shows up in the health check instead of only failing
+  // silently on the first data request.
+  const mongoStateNames = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  const mongoState = mongoStateNames[mongoose.connection.readyState] || 'unknown';
+  const dbConfigured = !!process.env.MONGODB_URI;
+
   res.json({
-    status: 'healthy',
+    status: !dbConfigured || mongoState === 'connected' ? 'healthy' : 'degraded',
     service: 'dealbeam-crm',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    mongodb: dbConfigured ? mongoState : 'not_configured'
   });
 });
 
@@ -144,14 +153,30 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 const connectDatabase = async () => {
   if (process.env.MONGODB_URI) {
     try {
-      await mongoose.connect(process.env.MONGODB_URI);
+      await mongoose.connect(process.env.MONGODB_URI, {
+        serverSelectionTimeoutMS: 10000
+      });
       logger.info('MongoDB connected successfully');
     } catch (error) {
-      logger.warn('MongoDB connection failed:', error.message);
+      // winston's `simple()` console format only renders the `message`
+      // field — a second positional arg (error.message) is silently
+      // dropped, so this used to log as a bare "MongoDB connection
+      // failed:" with no reason. Interpolate it into the message itself
+      // so the real cause (auth, DNS, timeout, etc.) is always visible.
+      logger.warn(`MongoDB connection failed: ${error.message}`);
     }
   } else {
     logger.info('No MongoDB URI provided, running without database');
   }
+
+  // Surface connection drops after the initial connect too (network
+  // blips, credential rotation, etc.) — same reasoning as above.
+  mongoose.connection.on('error', (error) => {
+    logger.warn(`MongoDB connection error: ${error.message}`);
+  });
+  mongoose.connection.on('disconnected', () => {
+    logger.warn('MongoDB disconnected');
+  });
 };
 
 // Start server
